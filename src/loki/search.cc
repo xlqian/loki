@@ -317,8 +317,8 @@ PathLocation Search(const Location& location, GraphReader& reader, const EdgeFil
       auto edges = tile->GetBin(std::get<1>(bin));
       bins += static_cast<size_t>(edges.size() > 0);
       for(auto e : edges) {
-        //get the tile and edge
-        if(e.tileid() != tile->id().tileid())
+        //get the tile and edge, level logic needed for transit as connections go to level 3
+        if(e.tileid() != tile->id().tileid() || e.level() != tile->id().level())
           tile = reader.GetGraphTile(e);
         const auto* edge = tile->directededge(e);
         //no thanks on this one or it evil twin
