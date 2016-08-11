@@ -164,6 +164,7 @@ namespace valhalla {
         long_request(config.get<float>("loki.logging.long_request")),
         max_contours(config.get<unsigned int>("service_limits.isochrone.max_contours")),
         max_time(config.get<unsigned int>("service_limits.isochrone.max_time")) {
+
       // Keep a string noting which actions we support, throw if one isnt supported
       for (const auto& kv : config.get_child("loki.actions")) {
         auto path = "/" + kv.second.get_value<std::string>();
@@ -189,9 +190,9 @@ namespace valhalla {
         throw std::runtime_error("Missing max_distance configuration.");
 
       min_transit_walking_dis =
-          config.get<int>("service_limits.pedestrian.min_transit_walking_distance");
+        config.get<int>("service_limits.pedestrian.min_transit_walking_distance");
       max_transit_walking_dis =
-          config.get<int>("service_limits.pedestrian.max_transit_walking_distance");
+        config.get<int>("service_limits.pedestrian.max_transit_walking_distance");
 
       // Register edge/node costing methods
       // TODO: move this into the loop above
@@ -273,7 +274,8 @@ namespace valhalla {
         auto e = std::chrono::system_clock::now();
         std::chrono::duration<float, std::milli> elapsed_time = e - s;
         //log request if greater than X (ms)
-        if (!info.do_not_track && (elapsed_time.count() / locations.size()) > long_request) {
+        auto work_units = locations.size() ? locations.size() : 1;
+        if (!info.do_not_track && elapsed_time.count() / work_units > long_request) {
           std::stringstream ss;
           boost::property_tree::json_parser::write_json(ss, request_pt, false);
           LOG_WARN("loki::request elapsed time (ms)::"+ std::to_string(elapsed_time.count()));
