@@ -35,6 +35,7 @@ namespace {
     {"/sources_to_targets", loki_worker_t::SOURCES_TO_TARGETS},
     {"/optimized_route", loki_worker_t::OPTIMIZED_ROUTE},
     {"/isochrone", loki_worker_t::ISOCHRONE},
+    {"/attributes", loki_worker_t::ATTRIBUTES},
   };
 
   const headers_t::value_type CORS{"Access-Control-Allow-Origin", "*"};
@@ -103,7 +104,7 @@ namespace {
 namespace valhalla {
   namespace loki {
 
-    void loki_worker_t::location_parser(const boost::property_tree::ptree& request) {
+    void loki_worker_t::parse_locations(const boost::property_tree::ptree& request) {
       //we require locations
       auto request_locations = request.get_child_optional("locations");
       if (!request_locations)
@@ -120,7 +121,7 @@ namespace valhalla {
       valhalla::midgard::logging::Log("location_count::" + std::to_string(request_locations->size()), " [ANALYTICS] ");
     }
 
-    void loki_worker_t::determine_costing_options(const boost::property_tree::ptree& request) {
+    void loki_worker_t::parse_costing(const boost::property_tree::ptree& request) {
       //using the costing we can determine what type of edge filtering to use
        auto costing = request.get_optional<std::string>("costing");
        if (costing)
@@ -241,24 +242,31 @@ namespace valhalla {
 
         //parse the query's json
         auto request_pt = from_request(action->second, request);
+        //let further processes more easily know what kind of request it was
+        request_pt.put<int>("action", action->second);
+
+        //do request specific processing
         switch (action->second) {
-        case ROUTE:
-        case VIAROUTE:
-          result = route(action->second, request_pt, info);
-          break;
-        case LOCATE:
-          result = locate(request_pt, info);
-          break;
-        case ONE_TO_MANY:
-        case MANY_TO_ONE:
-        case MANY_TO_MANY:
-        case SOURCES_TO_TARGETS:
-        case OPTIMIZED_ROUTE:
-          result = matrix(action->second, request_pt, info);
-          break;
-        case ISOCHRONE:
-          result = isochrones(request_pt, info);
-          break;
+          case ROUTE:
+          case VIAROUTE:
+            result = route(request_pt, info);
+            break;
+          case LOCATE:
+            result = locate(request_pt, info);
+            break;
+          case ONE_TO_MANY:
+          case MANY_TO_ONE:
+          case MANY_TO_MANY:
+          case SOURCES_TO_TARGETS:
+          case OPTIMIZED_ROUTE:
+            result = matrix(action->second, request_pt, info);
+            break;
+          case ISOCHRONE:
+            result = isochrones(request_pt, info);
+            break;
+          case ATTRIBUTES:
+            result = attributes(request_pt, info);
+            break;
         }
 
         //get processing time for loki
