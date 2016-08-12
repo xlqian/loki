@@ -172,7 +172,7 @@ namespace valhalla {
         auto found = searched.find(l);
         if(found == searched.cend()) {
           auto correlated = loki::Search(l, reader, edge_filter, node_filter);
-          found = searched.insert({l, std::move(correlated)}).first;
+          found = searched.insert({l, std::move(correlated.rbegin()->second)}).first;
         }
         request.put_child("correlated_" + std::to_string(i), found->second.ToPtree(i));
 

@@ -8,6 +8,7 @@
 #include <valhalla/sif/dynamiccost.h>
 
 #include <functional>
+#include <map>
 
 namespace valhalla{
 namespace loki{
@@ -36,10 +37,12 @@ const sif::NodeFilter PassThroughNodeFilter = [](const baldr::NodeInfo* node){ r
  * @param reader         and object used to access tiled route data TODO: switch this out for a proper cache
  * @param edge_filter    a function/functor to be used in the rejection of edges. defaults to a pass through filter
  * @param node_filter    a function/functor to be used in the rejection of nodes used in graph traversal. defaults to a pass through filter
- * @return pathLocation  the correlated data with in the tile that matches the input
+ * @param max_results    the maximum number of results to be returned
+ * @return               a map of rank to pathLocation which is the correlated data with in the tile that matches the input. higher rank values
+ *                       denote higher quality results
  */
-baldr::PathLocation Search(const baldr::Location& location, baldr::GraphReader& reader,
-  const sif::EdgeFilter& edge_filter = PassThroughEdgeFilter, const sif::NodeFilter& node_filter = PassThroughNodeFilter);
+std::map<float, baldr::PathLocation> Search(const baldr::Location& location, baldr::GraphReader& reader,
+  const sif::EdgeFilter& edge_filter = PassThroughEdgeFilter, const sif::NodeFilter& node_filter = PassThroughNodeFilter, size_t max_results = 3);
 
 }
 }
