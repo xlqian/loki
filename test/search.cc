@@ -151,8 +151,11 @@ void search(const valhalla::baldr::Location& location, bool expected_node, const
   boost::property_tree::json_parser::read_json(json, conf);
 
   valhalla::baldr::GraphReader reader(conf);
-  valhalla::baldr::PathLocation p = valhalla::loki::Search(location, reader,
+  auto results = valhalla::loki::Search(location, reader,
     valhalla::loki::PassThroughEdgeFilter, valhalla::loki::PassThroughNodeFilter);
+  if(!results.size())
+    throw std::logic_error("should never have no results");
+  const auto& p = results.begin()->second;
 
   if((p.edges.front().begin_node() || p.edges.front().end_node()) != expected_node)
     throw std::runtime_error(expected_node ? "Should've snapped to node" : "Shouldn't've snapped to node");
