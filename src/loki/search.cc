@@ -148,7 +148,17 @@ struct closest_t{
   GraphId id;
   std::unique_ptr<const EdgeInfo> edge_info;
   std::tuple<PointLL, float, int> point{{}, std::numeric_limits<float>::max(), 0};
+
+  //sorting
   bool operator<(const closest_t& other) const { return std::get<1>(point) > std::get<1>(other.point); }
+  //defaulting
+  closest_t() {}
+  //moveing
+  closest_t(closest_t&& c):tile(std::move(c.tile)),edge(std::move(c.edge)),id(std::move(c.id)),edge_info(std::move(c.edge_info)),point(std::move(c.point)) {}
+  //copying
+  closest_t(const closest_t& c):tile(c.tile),edge(c.edge),id(c.id),point(c.point) {}
+  //opposing
+  closest_t(const closest_t& c, GraphReader& reader):tile(c.tile),id(c.id) { id = get_opposing(id, tile, reader); edge = tile->directededge(id); }
 };
 
 PathLocation correlate_node(GraphReader& reader, const Location& location, const EdgeFilter& edge_filter, const closest_t& closest){
@@ -369,7 +379,10 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
   //TODO: change filtering from boolean to floating point 0-1
 
   //give up if we find nothing after a while
-  std::list<closest_t> closest;
+  std::set<closest_t, std::function<bool (const closest_t&, const closest_t&)> > closest(
+    [](const closest_t& a, const closest_t& b){return std::get<1>(a.point) < std::get<1>(b.point);});
+  //TODO: it might be more expensive to track this than not
+  std::unordered_set<uint64_t> seen(1000);
   size_t bins = 0;
   while(true) {
     try {
@@ -380,7 +393,7 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
 
       //the closest thing in this bin is further than what we have already
       //TODO: keep searching a if we have very few or very crappy results so far
-      if(closest.size() && std::get<2>(bin) > std::get<1>(closest.back().point))
+      if(closest.size() && std::get<2>(bin) > std::get<1>(closest.rbegin()->point))
         break;
 
       //grab the tile the lat, lon is in
@@ -392,34 +405,30 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
       auto edges = tile->GetBin(std::get<1>(bin));
       bins += static_cast<size_t>(edges.size() > 0);
       for(auto e : edges) {
+        //nothing new here
+        if(seen.find(e) != seen.cend())
+          continue;
         //get the tile and edge
         closest_t candidate;
         candidate.tile = e.tileid() != tile->id().tileid() ? reader.GetGraphTile(e) : tile;
         candidate.edge = tile->directededge(e);
-        //no thanks on this one or its evil twin
-        if(edge_filter(candidate.edge) == 0.f &&
-          (!(e = get_opposing(e, candidate.tile, reader)).Is_Valid() ||
-             edge_filter(candidate.edge = tile->directededge(e)) == 0.f)) {
-          continue;
+        //no thanks on this one
+        seen.insert(e);
+        if(edge_filter(candidate.edge) == 0.f) {
+          //or its evil twin
+          e = get_opposing(e, candidate.tile, reader);
+          seen.insert(e);
+          if(!e.Is_Valid() || edge_filter(candidate.edge = tile->directededge(e)) == 0.f)
+            continue;
         }
         //get some info about the edge
+        candidate.id = e;
         candidate.edge_info = candidate.tile->edgeinfo(candidate.edge->edgeinfo_offset());
         candidate.point = project(location.latlng_, candidate.edge_info->shape());
-
-        //we haven't got anything yet so we'll take it
-        if(closest.empty()) {
-          closest.emplace_back(std::move(candidate));
-        }//we still have room even for worse ones
-        else if(closest.size() < max_results) {
-          if(std::get<1>(candidate.point) < std::get<1>(closest.back().point))
-            closest.emplace_front(std::move(candidate));
-          else
-            closest.emplace_back(std::move(candidate));
-        }//we dont have room for worse ones
-        else if(std::get<1>(candidate.point) < std::get<1>(closest.back().point)) {
-          closest.emplace_front(std::move(candidate));
-        }
-
+        //add it in
+        closest.emplace(std::move(candidate));
+        if(closest.size() > max_results)
+          closest.erase(std::prev(closest.end()));
       }
     }
     catch(...) {
@@ -433,7 +442,7 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
 
   //for each thing we found
   std::map<float, PathLocation> results;
-  for(auto& candidate : closest) {
+  for(const auto& candidate : closest) {
     //this may be at a node, either because it was the closest thing or from snap tolerance
     bool front = std::get<0>(candidate.point) == candidate.edge_info->shape().front() ||
                  location.latlng_.Distance(candidate.edge_info->shape().front()) < NODE_SNAP;
@@ -441,16 +450,16 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
                 location.latlng_.Distance(candidate.edge_info->shape().back()) < NODE_SNAP;
     //it was the begin node, so switch to opposing
     if((front && candidate.edge->forward()) || (back && !candidate.edge->forward())) {
-      candidate.id = get_opposing(candidate.id, candidate.tile, reader);
-      candidate.edge = candidate.tile->directededge(candidate.id);
-      candidate.point = std::make_tuple(front ? candidate.edge_info->shape().front() : candidate.edge_info->shape().back(), 0, 0);
-      auto result = correlate_node(reader, location, edge_filter, candidate);
+      closest_t opp_node(candidate, reader);
+      opp_node.point = std::make_tuple(front ? candidate.edge_info->shape().front() : candidate.edge_info->shape().back(), 0, 0);
+      auto result = correlate_node(reader, location, edge_filter, opp_node);
       if(result.edges.size())
-        results.emplace(std::get<1>(candidate.point), std::move(result));
+        results.emplace(std::get<1>(opp_node.point), std::move(result));
     }//it was the end node
     else if((back && candidate.edge->forward()) || (front && !candidate.edge->forward())) {
-      candidate.point = std::make_tuple(front ? candidate.edge_info->shape().front() : candidate.edge_info->shape().back(), 0, 0);
-      auto result = correlate_node(reader, location, edge_filter, candidate);
+      closest_t node(candidate);
+      node.point = std::make_tuple(front ? candidate.edge_info->shape().front() : candidate.edge_info->shape().back(), 0, 0);
+      auto result = correlate_node(reader, location, edge_filter, node);
       if(result.edges.size())
         results.emplace(std::get<1>(candidate.point), std::move(result));
     }//it was along the edge

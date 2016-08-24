@@ -189,7 +189,7 @@ void TestEdgeSearch() {
 
   //mid point search
   auto answer = a.second.MidPoint(d.second);
-  search({a.second.MidPoint(d.second)}, false, a.second.MidPoint(d.second), { PE{{t, l, 3}, .5f, answer, S::NONE}, PE{{t, l, 8}, .5f, answer, S::NONE} });
+  search({answer}, false, answer, { PE{{t, l, 3}, .5f, answer, S::NONE}, PE{{t, l, 8}, .5f, answer, S::NONE} });
 
   //set a point 40% along the edge runs with the shape direction
   answer = a.second.AffineCombination(.6f, .4f, d.second);
