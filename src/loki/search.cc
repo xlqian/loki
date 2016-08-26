@@ -1,5 +1,6 @@
 #include "loki/search.h"
 #include <valhalla/midgard/linesegment2.h>
+#include <valhalla/midgard/util.h>
 
 #include <unordered_set>
 #include <list>
@@ -13,7 +14,9 @@ using namespace valhalla::loki;
 namespace {
 //the cutoff at which we will assume the input is too far away from civilisation to be
 //worth correlating to the nearest graph elements
-constexpr float SEARCH_CUTTOFF = 35000.f;
+constexpr float SEARCH_CUTOFF = 35000.f;
+//the number of edges to have visited within a region to identify such a reason as not an island
+constexpr size_t CONNECTED_REGION = 500;
 //during edge correlation, if you end up < 5 meters from the beginning or end of the
 //edge we just assume you were at that node and not actually along the edge
 //we keep it small because point and click interfaces are more accurate than gps input
@@ -142,7 +145,7 @@ GraphId get_opposing(const GraphId& edge_id, const GraphTile*& tile, GraphReader
   return id;
 }
 
-struct closest_t{
+struct candidate_t{
   const GraphTile* tile = nullptr;
   const DirectedEdge* edge = nullptr;
   GraphId id;
@@ -150,18 +153,18 @@ struct closest_t{
   std::tuple<PointLL, float, int> point{{}, std::numeric_limits<float>::max(), 0};
 
   //sorting
-  bool operator<(const closest_t& other) const { return std::get<1>(point) > std::get<1>(other.point); }
+  bool operator<(const candidate_t& other) const { return std::get<1>(point) > std::get<1>(other.point); }
   //defaulting
-  closest_t() {}
+  candidate_t() {}
   //moveing
-  closest_t(closest_t&& c):tile(std::move(c.tile)),edge(std::move(c.edge)),id(std::move(c.id)),edge_info(std::move(c.edge_info)),point(std::move(c.point)) {}
+  candidate_t(candidate_t&& c):tile(std::move(c.tile)),edge(std::move(c.edge)),id(std::move(c.id)),edge_info(std::move(c.edge_info)),point(std::move(c.point)) {}
   //copying
-  closest_t(const closest_t& c):tile(c.tile),edge(c.edge),id(c.id),point(c.point) {}
+  candidate_t(const candidate_t& c):tile(c.tile),edge(c.edge),id(c.id),point(c.point) {}
   //opposing
-  closest_t(const closest_t& c, GraphReader& reader):tile(c.tile),id(c.id) { id = get_opposing(id, tile, reader); edge = tile->directededge(id); }
+  candidate_t(const candidate_t& c, GraphReader& reader):tile(c.tile),id(c.id) { id = get_opposing(id, tile, reader); edge = tile->directededge(id); }
 };
 
-PathLocation correlate_node(GraphReader& reader, const Location& location, const EdgeFilter& edge_filter, const closest_t& closest){
+PathLocation correlate_node(GraphReader& reader, const Location& location, const EdgeFilter& edge_filter, const candidate_t& closest){
   PathLocation correlated(location);
   std::list<PathLocation::PathEdge> heading_filtered;
   //now that we have a node we can pass back all the edges leaving and entering it
@@ -210,7 +213,7 @@ PathLocation correlate_node(GraphReader& reader, const Location& location, const
   return correlated;
 }
 
-PathLocation correlate_edge(GraphReader& reader, const Location& location, const EdgeFilter& edge_filter, const closest_t& closest) {
+PathLocation correlate_edge(GraphReader& reader, const Location& location, const EdgeFilter& edge_filter, const candidate_t& closest) {
   //now that we have an edge we can pass back all the info about it
   PathLocation correlated(location);
   if(closest.edge != nullptr){
@@ -369,7 +372,8 @@ std::unordered_set<GraphId> island(const PathLocation& location,
   return (todo.size() == 0) ? done : std::unordered_set<GraphId>{};
 }
 
-std::map<float, PathLocation> search(const Location& location, GraphReader& reader, const EdgeFilter& edge_filter, size_t max_results) {
+std::map<float, PathLocation> search(const Location& location, GraphReader& reader,
+    const EdgeFilter& edge_filter, const NodeFilter& node_filter, size_t max_results) {
   //iterate over bins in a closest first manner
   const auto& tiles = reader.GetTileHierarchy().levels().rbegin()->second.tiles;
   const auto level = reader.GetTileHierarchy().levels().rbegin()->first;
@@ -379,21 +383,21 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
   //TODO: change filtering from boolean to floating point 0-1
 
   //give up if we find nothing after a while
-  std::set<closest_t, std::function<bool (const closest_t&, const closest_t&)> > closest(
-    [](const closest_t& a, const closest_t& b){return std::get<1>(a.point) < std::get<1>(b.point);});
+  std::set<candidate_t, std::function<bool (const candidate_t&, const candidate_t&)> > candidates(
+    [](const candidate_t& a, const candidate_t& b){return std::get<1>(a.point) < std::get<1>(b.point);});
   //TODO: it might be more expensive to track this than not
-  std::unordered_set<uint64_t> seen(1000);
+  std::unordered_set<uint64_t> seen(max_results * CONNECTED_REGION);
   size_t bins = 0;
   while(true) {
     try {
       //TODO: make configurable the radius at which we give up searching
       auto bin = binner();
-      if(std::get<2>(bin) > SEARCH_CUTTOFF)
+      if(std::get<2>(bin) > SEARCH_CUTOFF)
         break;
 
       //the closest thing in this bin is further than what we have already
       //TODO: keep searching a if we have very few or very crappy results so far
-      if(closest.size() && std::get<2>(bin) > std::get<1>(closest.rbegin()->point))
+      if(candidates.size() && std::get<2>(bin) > std::get<1>(candidates.rbegin()->point))
         break;
 
       //grab the tile the lat, lon is in
@@ -409,7 +413,7 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
         if(seen.find(e) != seen.cend())
           continue;
         //get the tile and edge
-        closest_t candidate;
+        candidate_t candidate;
         candidate.tile = e.tileid() != tile->id().tileid() ? reader.GetGraphTile(e) : tile;
         candidate.edge = tile->directededge(e);
         //no thanks on this one
@@ -426,9 +430,8 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
         candidate.edge_info = candidate.tile->edgeinfo(candidate.edge->edgeinfo_offset());
         candidate.point = project(location.latlng_, candidate.edge_info->shape());
         //add it in
-        closest.emplace(std::move(candidate));
-        if(closest.size() > max_results)
-          closest.erase(std::prev(closest.end()));
+        candidates.emplace(std::move(candidate));
+        //TODO: should we limit the number of these we keep track of
       }
     }
     catch(...) {
@@ -440,34 +443,85 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
   //would rather log this in the service only, so lets figure a way to pass it back
   //midgard::logging::Log("valhalla_loki_bins_searched::" + std::to_string(bins), " [ANALYTICS] ");
 
-  //for each thing we found
+  //keep the results and keep track of what edges are on islands
   std::map<float, PathLocation> results;
-  for(const auto& candidate : closest) {
-    //this may be at a node, either because it was the closest thing or from snap tolerance
+  std::list<std::unordered_set<uint64_t> > islands;
+  auto on_island = [&islands](const GraphId& id) {
+    for(const auto& i : islands)
+      if(i.find(id) != i.cend())
+        return true;
+    return false;
+  };
+
+  //recursive depth first search for expanding edges
+  std::function<void (const GraphTile*&, const DirectedEdge*, std::unordered_set<uint64_t>&)> depth_first;
+  depth_first = [&depth_first, &reader, &node_filter](const GraphTile*& tile, const DirectedEdge* edge, std::unordered_set<uint64_t>& visited) {
+      //can we get through the end node
+      if(tile->id().tileid() != edge->endnode().tileid())
+        tile = reader.GetGraphTile(edge->endnode());
+      const auto* node = tile->node(edge->endnode());
+      if(!node_filter(node)) {
+        //for each edge
+        iterable_t<const DirectedEdge> edges(tile->directededge(node->edge_index()), node->edge_count());
+        for(const auto& e : edges){
+          //saw this one yet?
+          auto id = tile->id();
+          id.fields.id = &e - tile->directededge(0);
+          auto i = visited.insert(id);
+          if(i.second && visited.size() < CONNECTED_REGION) {
+            depth_first(tile, &e, visited);
+          }
+        }
+      }
+    };
+
+  //check each candidate
+  for(const auto& candidate : candidates) {
+    //we've found enough results
+    if(results.size() - islands.size() == max_results)
+      continue;
+
+    //if this candidate was already found to be an island we dont really need it
+    //since we have a better candidate from the same island earlier
+    if(on_island(candidate.id))
+      continue;
+
+    //this may be at a node, either because it was the best thing or from snap tolerance
     bool front = std::get<0>(candidate.point) == candidate.edge_info->shape().front() ||
                  location.latlng_.Distance(candidate.edge_info->shape().front()) < NODE_SNAP;
     bool back = std::get<0>(candidate.point) == candidate.edge_info->shape().back() ||
                 location.latlng_.Distance(candidate.edge_info->shape().back()) < NODE_SNAP;
+    std::pair<float, PathLocation> result;
     //it was the begin node, so switch to opposing
     if((front && candidate.edge->forward()) || (back && !candidate.edge->forward())) {
-      closest_t opp_node(candidate, reader);
+      candidate_t opp_node(candidate, reader);
       opp_node.point = std::make_tuple(front ? candidate.edge_info->shape().front() : candidate.edge_info->shape().back(), 0, 0);
-      auto result = correlate_node(reader, location, edge_filter, opp_node);
-      if(result.edges.size())
-        results.emplace(std::get<1>(opp_node.point), std::move(result));
+      result.first = std::get<1>(opp_node.point);
+      result.second = correlate_node(reader, location, edge_filter, opp_node);
     }//it was the end node
     else if((back && candidate.edge->forward()) || (front && !candidate.edge->forward())) {
-      closest_t node(candidate);
+      candidate_t node(candidate);
       node.point = std::make_tuple(front ? candidate.edge_info->shape().front() : candidate.edge_info->shape().back(), 0, 0);
-      auto result = correlate_node(reader, location, edge_filter, node);
-      if(result.edges.size())
-        results.emplace(std::get<1>(candidate.point), std::move(result));
+      result.first = std::get<1>(candidate.point);
+      result.second = correlate_node(reader, location, edge_filter, node);
     }//it was along the edge
     else {
-      auto result = correlate_edge(reader, location, edge_filter, *closest.begin());
-      if(result.edges.size())
-        results.emplace(std::get<1>(candidate.point), std::move(result));
+      result.first = std::get<1>(candidate.point);
+      result.second = correlate_edge(reader, location, edge_filter, *candidates.begin());
     }
+
+    //what did we get?
+    if(!result.second.edges.size())
+      continue;
+    results.emplace(std::move(result));
+
+    //do a depth first search keeping edges visited in case its an island
+    std::unordered_set<uint64_t> island(CONNECTED_REGION);
+    const auto* tile = candidate.tile;
+    const auto* edge = candidate.edge;
+    depth_first(tile, edge, island);
+    if(island.size() < CONNECTED_REGION)
+      islands.emplace_back(std::move(island));
   }
 
   //if we still found nothing that is no good..
@@ -485,7 +539,7 @@ namespace loki {
 std::map<float, baldr::PathLocation> Search(const Location& location, GraphReader& reader,
     const EdgeFilter& edge_filter, const NodeFilter& node_filter, size_t max_results) {
   //TODO: check if its an island and then search again
-  return search(location, reader, edge_filter, max_results);
+  return search(location, reader, edge_filter, node_filter, max_results);
 }
 
 }
