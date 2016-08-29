@@ -491,7 +491,7 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
                  location.latlng_.Distance(candidate.edge_info->shape().front()) < NODE_SNAP;
     bool back = std::get<0>(candidate.point) == candidate.edge_info->shape().back() ||
                 location.latlng_.Distance(candidate.edge_info->shape().back()) < NODE_SNAP;
-    std::pair<float, PathLocation> result;
+    std::pair<float, PathLocation> result{std::numeric_limits<float>::max(), {location}};
     //it was the begin node, so switch to opposing
     if((front && candidate.edge->forward()) || (back && !candidate.edge->forward())) {
       candidate_t opp_node(candidate, reader);
