@@ -151,11 +151,8 @@ void search(const valhalla::baldr::Location& location, bool expected_node, const
   boost::property_tree::json_parser::read_json(json, conf);
 
   valhalla::baldr::GraphReader reader(conf);
-  auto results = valhalla::loki::Search(location, reader,
+  valhalla::baldr::PathLocation p = valhalla::loki::Search(location, reader,
     valhalla::loki::PassThroughEdgeFilter, valhalla::loki::PassThroughNodeFilter);
-  if(!results.size())
-    throw std::logic_error("should never have no results");
-  const auto& p = results.begin()->second;
 
   if((p.edges.front().begin_node() || p.edges.front().end_node()) != expected_node)
     throw std::runtime_error(expected_node ? "Should've snapped to node" : "Shouldn't've snapped to node");
@@ -189,7 +186,7 @@ void TestEdgeSearch() {
 
   //mid point search
   auto answer = a.second.MidPoint(d.second);
-  search({answer}, false, answer, { PE{{t, l, 3}, .5f, answer, S::NONE}, PE{{t, l, 8}, .5f, answer, S::NONE} });
+  search({a.second.MidPoint(d.second)}, false, a.second.MidPoint(d.second), { PE{{t, l, 3}, .5f, answer, S::NONE}, PE{{t, l, 8}, .5f, answer, S::NONE} });
 
   //set a point 40% along the edge runs with the shape direction
   answer = a.second.AffineCombination(.6f, .4f, d.second);

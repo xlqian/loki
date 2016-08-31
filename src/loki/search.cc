@@ -164,8 +164,8 @@ struct candidate_t{
   candidate_t(const candidate_t& c, GraphReader& reader):tile(c.tile),id(c.id) { id = get_opposing(id, tile, reader); edge = tile->directededge(id); }
 };
 
-PathLocation correlate_node(GraphReader& reader, const Location& location, const EdgeFilter& edge_filter, const candidate_t& closest){
-  PathLocation correlated(location);
+std::vector<PathLocation::PathEdge> correlate_node(GraphReader& reader, const Location& location, const EdgeFilter& edge_filter, const candidate_t& closest){
+  std::vector<PathLocation::PathEdge> correlated;
   std::list<PathLocation::PathEdge> heading_filtered;
   //now that we have a node we can pass back all the edges leaving and entering it
   const auto* tile = closest.tile->id().tileid() != closest.id.tileid() ? reader.GetGraphTile(closest.edge->endnode()) : closest.tile;
@@ -188,7 +188,7 @@ PathLocation correlate_node(GraphReader& reader, const Location& location, const
       PathLocation::PathEdge path_edge{std::move(id), 0.f, node->latlng(), PathLocation::NONE};
       std::get<2>(closest_point) = edge->forward() ? 0 : info->shape().size() - 2;
       if(!heading_filter(edge, info, closest_point, location.heading_))
-        correlated.edges.push_back(std::move(path_edge));
+        correlated.push_back(std::move(path_edge));
       else
         heading_filtered.emplace_back(std::move(path_edge));
     }
@@ -198,24 +198,26 @@ PathLocation correlate_node(GraphReader& reader, const Location& location, const
       PathLocation::PathEdge path_edge{std::move(other_id), 1.f, node->latlng(),PathLocation::NONE};
       std::get<2>(closest_point) = other_edge->forward() ? 0 : info->shape().size() - 2;
       if(!heading_filter(other_edge, tile->edgeinfo(edge->edgeinfo_offset()), closest_point, location.heading_))
-        correlated.edges.push_back(std::move(path_edge));
+        correlated.push_back(std::move(path_edge));
       else
         heading_filtered.emplace_back(std::move(path_edge));
     }
   }
 
+  //TODO: now that we return multiple results we need to score
+  //these lower or maybe not return them
   //if we have nothing because of heading we'll just ignore it
-  if(correlated.edges.size() == 0 && heading_filtered.size())
+  if(correlated.size() == 0 && heading_filtered.size())
     for(auto& path_edge : heading_filtered)
-      correlated.edges.push_back(std::move(path_edge));
+      correlated.push_back(std::move(path_edge));
 
   //give it back
   return correlated;
 }
 
-PathLocation correlate_edge(GraphReader& reader, const Location& location, const EdgeFilter& edge_filter, const candidate_t& closest) {
+std::vector<PathLocation::PathEdge> correlate_edge(GraphReader& reader, const Location& location, const EdgeFilter& edge_filter, const candidate_t& closest) {
   //now that we have an edge we can pass back all the info about it
-  PathLocation correlated(location);
+  std::vector<PathLocation::PathEdge> correlated;
   if(closest.edge != nullptr){
     //we need the ratio in the direction of the edge we are correlated to
     double partial_length = 0;
@@ -233,7 +235,7 @@ PathLocation correlate_edge(GraphReader& reader, const Location& location, const
     if(heading_filter(closest.edge, closest.edge_info, closest.point, location.heading_))
       heading_filtered.emplace_back(closest.id, length_ratio, std::get<0>(closest.point), side);
     else
-      correlated.edges.push_back(PathLocation::PathEdge{closest.id, length_ratio, std::get<0>(closest.point), side});
+      correlated.push_back(PathLocation::PathEdge{closest.id, length_ratio, std::get<0>(closest.point), side});
     //correlate its evil twin
     const GraphTile* other_tile = closest.tile;
     auto opposing_edge_id = get_opposing(closest.id, other_tile, reader);
@@ -242,13 +244,15 @@ PathLocation correlate_edge(GraphReader& reader, const Location& location, const
       if(heading_filter(other_edge, closest.edge_info, closest.point, location.heading_))
         heading_filtered.emplace_back(opposing_edge_id, 1 - length_ratio, std::get<0>(closest.point), flip_side(side));
       else
-        correlated.edges.push_back(PathLocation::PathEdge{opposing_edge_id, 1 - length_ratio, std::get<0>(closest.point), flip_side(side)});
+        correlated.push_back(PathLocation::PathEdge{opposing_edge_id, 1 - length_ratio, std::get<0>(closest.point), flip_side(side)});
     }
 
+    //TODO: now that we return multiple results we need to score
+    //these lower or maybe not return them
     //if we have nothing because of heading we'll just ignore it
-    if(correlated.edges.size() == 0 && heading_filtered.size())
+    if(correlated.size() == 0 && heading_filtered.size())
       for(auto& path_edge : heading_filtered)
-        correlated.edges.push_back(std::move(path_edge));
+        correlated.push_back(std::move(path_edge));
   }
 
   //give it back
@@ -372,7 +376,7 @@ std::unordered_set<GraphId> island(const PathLocation& location,
   return (todo.size() == 0) ? done : std::unordered_set<GraphId>{};
 }
 
-std::map<float, PathLocation> search(const Location& location, GraphReader& reader,
+PathLocation search(const Location& location, GraphReader& reader,
     const EdgeFilter& edge_filter, const NodeFilter& node_filter, size_t max_results) {
   //iterate over bins in a closest first manner
   const auto& tiles = reader.GetTileHierarchy().levels().rbegin()->second.tiles;
@@ -444,7 +448,6 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
   //midgard::logging::Log("valhalla_loki_bins_searched::" + std::to_string(bins), " [ANALYTICS] ");
 
   //keep the results and keep track of what edges are on islands
-  std::map<float, PathLocation> results;
   std::list<std::unordered_set<uint64_t> > islands;
   auto on_island = [&islands](const GraphId& id) {
     for(const auto& i : islands)
@@ -476,9 +479,11 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
     };
 
   //check each candidate
+  PathLocation result(location);
+  size_t result_count = 0;
   for(const auto& candidate : candidates) {
     //we've found enough results
-    if(results.size() - islands.size() == max_results)
+    if(result_count - islands.size() == max_results)
       continue;
 
     //if this candidate was already found to be an island we dont really need it
@@ -491,29 +496,29 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
                  location.latlng_.Distance(candidate.edge_info->shape().front()) < NODE_SNAP;
     bool back = std::get<0>(candidate.point) == candidate.edge_info->shape().back() ||
                 location.latlng_.Distance(candidate.edge_info->shape().back()) < NODE_SNAP;
-    std::pair<float, PathLocation> result{std::numeric_limits<float>::max(), {location}};
+    std::vector<PathLocation::PathEdge> correlated;
     //it was the begin node, so switch to opposing
     if((front && candidate.edge->forward()) || (back && !candidate.edge->forward())) {
       candidate_t opp_node(candidate, reader);
       opp_node.point = std::make_tuple(front ? candidate.edge_info->shape().front() : candidate.edge_info->shape().back(), 0, 0);
-      result.first = std::get<1>(opp_node.point);
-      result.second = correlate_node(reader, location, edge_filter, opp_node);
+      correlated = correlate_node(reader, location, edge_filter, opp_node);
     }//it was the end node
     else if((back && candidate.edge->forward()) || (front && !candidate.edge->forward())) {
       candidate_t node(candidate);
       node.point = std::make_tuple(front ? candidate.edge_info->shape().front() : candidate.edge_info->shape().back(), 0, 0);
-      result.first = std::get<1>(candidate.point);
-      result.second = correlate_node(reader, location, edge_filter, node);
+      correlated = correlate_node(reader, location, edge_filter, node);
     }//it was along the edge
     else {
-      result.first = std::get<1>(candidate.point);
-      result.second = correlate_edge(reader, location, edge_filter, *candidates.begin());
+      correlated = correlate_edge(reader, location, edge_filter, *candidates.begin());
     }
 
     //what did we get?
-    if(!result.second.edges.size())
+    if(!correlated.size())
       continue;
-    results.emplace(std::move(result));
+    result_count++;
+    result.edges.insert(result.edges.end(),
+      std::make_move_iterator(correlated.begin()),
+      std::make_move_iterator(correlated.end()));
 
     //do a depth first search keeping edges visited in case its an island
     std::unordered_set<uint64_t> island(CONNECTED_REGION);
@@ -525,10 +530,10 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
   }
 
   //if we still found nothing that is no good..
-  if(results.size() == 0)
+  if(result_count == 0)
     throw std::runtime_error("No suitable edges near location");
 
-  return results;
+  return result;
 }
 
 }
@@ -536,7 +541,7 @@ std::map<float, PathLocation> search(const Location& location, GraphReader& read
 namespace valhalla {
 namespace loki {
 
-std::map<float, baldr::PathLocation> Search(const Location& location, GraphReader& reader,
+baldr::PathLocation Search(const Location& location, GraphReader& reader,
     const EdgeFilter& edge_filter, const NodeFilter& node_filter, size_t max_results) {
   //TODO: check if its an island and then search again
   return search(location, reader, edge_filter, node_filter, max_results);
