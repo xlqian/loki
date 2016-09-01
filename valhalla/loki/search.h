@@ -41,7 +41,7 @@ const sif::NodeFilter PassThroughNodeFilter = [](const baldr::NodeInfo* node){ r
  * @return               a pathLocation, ie correlated edges with in the graph matching the input. best first order
  */
 baldr::PathLocation Search(const baldr::Location& location, baldr::GraphReader& reader,
-  const sif::EdgeFilter& edge_filter = PassThroughEdgeFilter, const sif::NodeFilter& node_filter = PassThroughNodeFilter, size_t max_results = 3);
+  const sif::EdgeFilter& edge_filter = PassThroughEdgeFilter, const sif::NodeFilter& node_filter = PassThroughNodeFilter);
 
 }
 }

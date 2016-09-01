@@ -16,7 +16,9 @@ namespace {
 //worth correlating to the nearest graph elements
 constexpr float SEARCH_CUTOFF = 35000.f;
 //the number of edges to have visited within a region to identify such a reason as not an island
-constexpr size_t CONNECTED_REGION = 500;
+constexpr size_t CONNECTED_REGION = 100;
+//maximum number of candidates to keep track of when evaluating edges for correlation
+constexpr size_t MAX_CANDIDATES = 20;
 //during edge correlation, if you end up < 5 meters from the beginning or end of the
 //edge we just assume you were at that node and not actually along the edge
 //we keep it small because point and click interfaces are more accurate than gps input
@@ -377,7 +379,7 @@ std::unordered_set<GraphId> island(const PathLocation& location,
 }
 
 PathLocation search(const Location& location, GraphReader& reader,
-    const EdgeFilter& edge_filter, const NodeFilter& node_filter, size_t max_results) {
+    const EdgeFilter& edge_filter, const NodeFilter& node_filter) {
   //iterate over bins in a closest first manner
   const auto& tiles = reader.GetTileHierarchy().levels().rbegin()->second.tiles;
   const auto level = reader.GetTileHierarchy().levels().rbegin()->first;
@@ -387,12 +389,12 @@ PathLocation search(const Location& location, GraphReader& reader,
   //TODO: change filtering from boolean to floating point 0-1
 
   //give up if we find nothing after a while
-  std::set<candidate_t, std::function<bool (const candidate_t&, const candidate_t&)> > candidates(
-    [](const candidate_t& a, const candidate_t& b){return std::get<1>(a.point) < std::get<1>(b.point);});
+  std::list<candidate_t> candidates;
+  float best_so_far = std::numeric_limits<float>::max();
   //TODO: it might be more expensive to track this than not
-  std::unordered_set<uint64_t> seen(max_results * CONNECTED_REGION);
+  //std::unordered_set<uint64_t> seen(max_results * CONNECTED_REGION);
   size_t bins = 0;
-  while(true) {
+  while(candidates.size() < MAX_CANDIDATES) {
     try {
       //TODO: make configurable the radius at which we give up searching
       auto bin = binner();
@@ -401,7 +403,7 @@ PathLocation search(const Location& location, GraphReader& reader,
 
       //the closest thing in this bin is further than what we have already
       //TODO: keep searching a if we have very few or very crappy results so far
-      if(candidates.size() && std::get<2>(bin) > std::get<1>(candidates.rbegin()->point))
+      if(candidates.size() && std::get<2>(bin) > best_so_far)
         break;
 
       //grab the tile the lat, lon is in
@@ -414,19 +416,19 @@ PathLocation search(const Location& location, GraphReader& reader,
       bins += static_cast<size_t>(edges.size() > 0);
       for(auto e : edges) {
         //nothing new here
-        if(seen.find(e) != seen.cend())
-          continue;
+        //if(seen.find(e) != seen.cend())
+        //  continue;
         //get the tile and edge
         candidate_t candidate;
         candidate.tile = e.tileid() != tile->id().tileid() ? reader.GetGraphTile(e) : tile;
-        candidate.edge = tile->directededge(e);
+        candidate.edge = candidate.tile->directededge(e);
         //no thanks on this one
-        seen.insert(e);
+        //seen.insert(e);
         if(edge_filter(candidate.edge) == 0.f) {
           //or its evil twin
           e = get_opposing(e, candidate.tile, reader);
-          seen.insert(e);
-          if(!e.Is_Valid() || edge_filter(candidate.edge = tile->directededge(e)) == 0.f)
+          //seen.insert(e);
+          if(!e.Is_Valid() || edge_filter(candidate.edge = candidate.tile->directededge(e)) == 0.f)
             continue;
         }
         //get some info about the edge
@@ -434,8 +436,9 @@ PathLocation search(const Location& location, GraphReader& reader,
         candidate.edge_info = candidate.tile->edgeinfo(candidate.edge->edgeinfo_offset());
         candidate.point = project(location.latlng_, candidate.edge_info->shape());
         //add it in
-        candidates.emplace(std::move(candidate));
-        //TODO: should we limit the number of these we keep track of
+        candidates.push_back(std::move(candidate));
+        if(best_so_far > std::get<1>(candidate.point))
+          best_so_far = std::get<1>(candidate.point);
       }
     }
     catch(...) {
@@ -478,13 +481,14 @@ PathLocation search(const Location& location, GraphReader& reader,
       }
     };
 
-  //check each candidate
+  //check each candidate best first
+  candidates.sort([](const candidate_t& a, const candidate_t& b){return std::get<1>(a.point) < std::get<1>(b.point);});
   PathLocation result(location);
   size_t result_count = 0;
   for(const auto& candidate : candidates) {
     //we've found enough results
-    if(result_count - islands.size() == max_results)
-      continue;
+    if(result_count - islands.size() > 0)
+      break;
 
     //if this candidate was already found to be an island we dont really need it
     //since we have a better candidate from the same island earlier
@@ -515,7 +519,6 @@ PathLocation search(const Location& location, GraphReader& reader,
     //what did we get?
     if(!correlated.size())
       continue;
-    result_count++;
     result.edges.insert(result.edges.end(),
       std::make_move_iterator(correlated.begin()),
       std::make_move_iterator(correlated.end()));
@@ -525,8 +528,16 @@ PathLocation search(const Location& location, GraphReader& reader,
     const auto* tile = candidate.tile;
     const auto* edge = candidate.edge;
     depth_first(tile, edge, island);
-    if(island.size() < CONNECTED_REGION)
+    //its a proper island
+    if(island.size() < CONNECTED_REGION) {
       islands.emplace_back(std::move(island));
+      result_count += 1;
+    }//its not but lets mark the opposing so we dont use it again
+    else {
+      tile = candidate.tile;
+      islands.emplace_back(std::unordered_set<uint64_t>{get_opposing(candidate.id, tile, reader)});
+      result_count += 2;
+    }
   }
 
   //if we still found nothing that is no good..
@@ -542,9 +553,9 @@ namespace valhalla {
 namespace loki {
 
 baldr::PathLocation Search(const Location& location, GraphReader& reader,
-    const EdgeFilter& edge_filter, const NodeFilter& node_filter, size_t max_results) {
+    const EdgeFilter& edge_filter, const NodeFilter& node_filter) {
   //TODO: check if its an island and then search again
-  return search(location, reader, edge_filter, node_filter, max_results);
+  return search(location, reader, edge_filter, node_filter);
 }
 
 }
