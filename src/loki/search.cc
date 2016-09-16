@@ -187,7 +187,7 @@ std::vector<PathLocation::PathEdge> correlate_node(GraphReader& reader, const Lo
 
     //do we want this edge
     if(edge_filter(edge) != 0.0f) {
-      PathLocation::PathEdge path_edge{std::move(id), 0.f, node->latlng(), PathLocation::NONE};
+      PathLocation::PathEdge path_edge{std::move(id), 0.f, node->latlng(), std::get<1>(closest_point), PathLocation::NONE};
       std::get<2>(closest_point) = edge->forward() ? 0 : info->shape().size() - 2;
       if(!heading_filter(edge, info, closest_point, location.heading_))
         correlated.push_back(std::move(path_edge));
@@ -197,7 +197,7 @@ std::vector<PathLocation::PathEdge> correlate_node(GraphReader& reader, const Lo
 
     //do we want the evil twin
     if(edge_filter(other_edge) != 0.0f) {
-      PathLocation::PathEdge path_edge{std::move(other_id), 1.f, node->latlng(),PathLocation::NONE};
+      PathLocation::PathEdge path_edge{std::move(other_id), 1.f, node->latlng(), std::get<1>(closest_point), PathLocation::NONE};
       std::get<2>(closest_point) = other_edge->forward() ? 0 : info->shape().size() - 2;
       if(!heading_filter(other_edge, tile->edgeinfo(edge->edgeinfo_offset()), closest_point, location.heading_))
         correlated.push_back(std::move(path_edge));
@@ -237,7 +237,7 @@ std::vector<PathLocation::PathEdge> correlate_edge(GraphReader& reader, const Lo
     if(heading_filter(closest.edge, closest.edge_info, closest.point, location.heading_))
       heading_filtered.emplace_back(closest.id, length_ratio, std::get<0>(closest.point), side);
     else
-      correlated.push_back(PathLocation::PathEdge{closest.id, length_ratio, std::get<0>(closest.point), side});
+      correlated.push_back(PathLocation::PathEdge{closest.id, length_ratio, std::get<0>(closest.point), std::get<1>(closest.point), side});
     //correlate its evil twin
     const GraphTile* other_tile = closest.tile;
     auto opposing_edge_id = get_opposing(closest.id, other_tile, reader);
@@ -246,7 +246,7 @@ std::vector<PathLocation::PathEdge> correlate_edge(GraphReader& reader, const Lo
       if(heading_filter(other_edge, closest.edge_info, closest.point, location.heading_))
         heading_filtered.emplace_back(opposing_edge_id, 1 - length_ratio, std::get<0>(closest.point), flip_side(side));
       else
-        correlated.push_back(PathLocation::PathEdge{opposing_edge_id, 1 - length_ratio, std::get<0>(closest.point), flip_side(side)});
+        correlated.push_back(PathLocation::PathEdge{opposing_edge_id, 1 - length_ratio, std::get<0>(closest.point), std::get<1>(closest.point), flip_side(side)});
     }
 
     //TODO: now that we return multiple results we need to score
@@ -505,15 +505,17 @@ PathLocation search(const Location& location, GraphReader& reader,
     if((front && candidate.edge->forward()) || (back && !candidate.edge->forward())) {
       candidate_t opp_node(candidate, reader);
       opp_node.point = std::make_tuple(front ? candidate.edge_info->shape().front() : candidate.edge_info->shape().back(), 0, 0);
+      std::get<1>(opp_node.point) = location.latlng_.Distance(std::get<0>(opp_node.point));
       correlated = correlate_node(reader, location, edge_filter, opp_node);
     }//it was the end node
     else if((back && candidate.edge->forward()) || (front && !candidate.edge->forward())) {
       candidate_t node(candidate);
       node.point = std::make_tuple(front ? candidate.edge_info->shape().front() : candidate.edge_info->shape().back(), 0, 0);
+      std::get<1>(node.point) = location.latlng_.Distance(std::get<0>(node.point));
       correlated = correlate_node(reader, location, edge_filter, node);
     }//it was along the edge
     else {
-      correlated = correlate_edge(reader, location, edge_filter, *candidates.begin());
+      correlated = correlate_edge(reader, location, edge_filter, candidate);
     }
 
     //what did we get?
