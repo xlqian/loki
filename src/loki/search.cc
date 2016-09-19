@@ -145,6 +145,11 @@ PathLocation correlate_node(GraphReader& reader, const Location& location, const
     id.fields.id = node->edge_index() + (edge - start_edge);
     const GraphTile* other_tile;
     const auto other_id = reader.GetOpposingEdgeId(id, other_tile);
+
+    // Protect against empty tile (e.g. for extracts from tile sets)
+    if (other_tile == nullptr) {
+      continue;
+    }
     const auto* other_edge = other_tile->directededge(other_id);
     auto info = tile->edgeinfo(edge->edgeinfo_offset());
 
@@ -207,12 +212,15 @@ PathLocation correlate_edge(GraphReader& reader, const Location& location, const
     //correlate its evil twin
     const GraphTile* other_tile;
     auto opposing_edge_id = reader.GetOpposingEdgeId(closest_edge_id, other_tile);
-    const DirectedEdge* other_edge;
-    if(opposing_edge_id.Is_Valid() && (other_edge = other_tile->directededge(opposing_edge_id)) && edge_filter(other_edge) != 0.0f) {
-      if(heading_filter(other_edge, closest_edge_info, closest_point, location.heading_))
-        heading_filtered.emplace_back(opposing_edge_id, 1 - length_ratio, std::get<0>(closest_point), std::get<1>(closest_point), flip_side(side));
-      else
-        correlated.edges.push_back(PathLocation::PathEdge{opposing_edge_id, 1 - length_ratio, std::get<0>(closest_point), std::get<1>(closest_point), flip_side(side)});
+    // Protect against empty tile (e.g. for extracts from tile sets)
+    if (other_tile != nullptr) {
+      const DirectedEdge* other_edge;
+      if(opposing_edge_id.Is_Valid() && (other_edge = other_tile->directededge(opposing_edge_id)) && edge_filter(other_edge) != 0.0f) {
+        if(heading_filter(other_edge, closest_edge_info, closest_point, location.heading_))
+          heading_filtered.emplace_back(opposing_edge_id, 1 - length_ratio, std::get<0>(closest_point), std::get<1>(closest_point), flip_side(side));
+        else
+          correlated.edges.push_back(PathLocation::PathEdge{opposing_edge_id, 1 - length_ratio, std::get<0>(closest_point), std::get<1>(closest_point), flip_side(side)});
+      }
     }
 
     //if we have nothing because of heading we'll just ignore it
