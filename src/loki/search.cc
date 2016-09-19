@@ -141,6 +141,8 @@ GraphId get_opposing(const GraphId& edge_id, const GraphTile*& tile, GraphReader
   const auto* edge = tile->directededge(edge_id);
   if(edge->leaves_tile())
     tile = reader.GetGraphTile(edge->endnode());
+  if(tile == nullptr)
+    return {};
   auto id = edge->endnode();
   auto* node = tile->node(edge->endnode());
   id.fields.id = tile->node(id)->edge_index() + edge->opp_index();
@@ -163,7 +165,7 @@ struct candidate_t{
   //copying
   candidate_t(const candidate_t& c):tile(c.tile),edge(c.edge),id(c.id),point(c.point) {}
   //opposing
-  candidate_t(const candidate_t& c, GraphReader& reader):tile(c.tile),id(c.id) { id = get_opposing(id, tile, reader); edge = tile->directededge(id); }
+  candidate_t(const candidate_t& c, GraphReader& reader):tile(c.tile),id(c.id) { id = get_opposing(id, tile, reader); if(id.Is_Valid()) edge = tile->directededge(id); }
 };
 
 std::vector<PathLocation::PathEdge> correlate_node(GraphReader& reader, const Location& location, const EdgeFilter& edge_filter, const candidate_t& closest){
@@ -181,7 +183,9 @@ std::vector<PathLocation::PathEdge> correlate_node(GraphReader& reader, const Lo
     GraphId id = tile->id();
     id.fields.id = node->edge_index() + (edge - start_edge);
     const GraphTile* other_tile = tile;
-    const auto other_id = get_opposing(id, other_tile, reader);
+    auto other_id = get_opposing(id, other_tile, reader);
+    if(!other_id.Is_Valid())
+      continue;
     const auto* other_edge = other_tile->directededge(other_id);
     auto info = tile->edgeinfo(edge->edgeinfo_offset());
 
@@ -241,12 +245,14 @@ std::vector<PathLocation::PathEdge> correlate_edge(GraphReader& reader, const Lo
     //correlate its evil twin
     const GraphTile* other_tile = closest.tile;
     auto opposing_edge_id = get_opposing(closest.id, other_tile, reader);
-    const auto* other_edge = other_tile->directededge(opposing_edge_id);
-    if(edge_filter(other_edge) != 0.0f) {
-      if(heading_filter(other_edge, closest.edge_info, closest.point, location.heading_))
-        heading_filtered.emplace_back(opposing_edge_id, 1 - length_ratio, std::get<0>(closest.point), flip_side(side));
-      else
-        correlated.push_back(PathLocation::PathEdge{opposing_edge_id, 1 - length_ratio, std::get<0>(closest.point), std::get<1>(closest.point), flip_side(side)});
+    if(opposing_edge_id.Is_Valid()) {
+      const auto* other_edge = other_tile->directededge(opposing_edge_id);
+      if(edge_filter(other_edge) != 0.0f) {
+        if(heading_filter(other_edge, closest.edge_info, closest.point, location.heading_))
+          heading_filtered.emplace_back(opposing_edge_id, 1 - length_ratio, std::get<0>(closest.point), flip_side(side));
+        else
+          correlated.push_back(PathLocation::PathEdge{opposing_edge_id, 1 - length_ratio, std::get<0>(closest.point), std::get<1>(closest.point), flip_side(side)});
+      }
     }
 
     //TODO: now that we return multiple results we need to score
