@@ -18,7 +18,7 @@ namespace {
 //worth correlating to the nearest graph elements
 constexpr float SEARCH_CUTOFF = 35000.f;
 //the number of edges to have visited within a region to identify such a reason as not an island
-constexpr size_t CONNECTED_REGION = 100;
+constexpr size_t CONNECTED_REGION = 200;
 //maximum number of candidates to keep track of when evaluating edges for correlation
 constexpr size_t MAX_CANDIDATES = 20;
 //during edge correlation, if you end up < 5 meters from the beginning or end of the
