@@ -9,7 +9,7 @@ if [[ $(grep -cF trusty /etc/lsb-release) > 0 ]]; then
   sudo add-apt-repository -y ppa:kevinkreiser/czmq
 fi
 sudo add-apt-repository -y ppa:kevinkreiser/prime-server
-sudo apt-get install -y autoconf automake pkg-config libtool make pkg-config gcc g++ lcov libboost1.54-all-dev libprime-server-dev
+sudo apt-get install -y autoconf automake pkg-config libtool make pkg-config gcc g++ lcov libboost1.54-all-dev libprime-server0.6.0-dev
 
 #clone async
 mkdir -p deps
