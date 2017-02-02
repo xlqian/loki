@@ -4,6 +4,7 @@
 #include <valhalla/baldr/json.h>
 #include <valhalla/baldr/pathlocation.h>
 #include <valhalla/midgard/logging.h>
+#include <rapidjson/pointer.h>
 
 using namespace prime_server;
 using namespace valhalla::baldr;
@@ -123,12 +124,11 @@ namespace {
 namespace valhalla {
   namespace loki {
 
-    void loki_worker_t::init_locate(const boost::property_tree::ptree& request) {
+    void loki_worker_t::init_locate(const rapidjson::Document& request) {
       parse_locations(request);
       if(locations.size() < 1)
         throw valhalla_exception_t{400, 120};
-      auto costing = request.get_optional<std::string>("costing");
-      if (costing)
+      if(request.HasMember("costing"))
         parse_costing(request);
       else {
         edge_filter = loki::PassThroughEdgeFilter;
@@ -136,33 +136,36 @@ namespace valhalla {
       }
     }
 
-    worker_t::result_t loki_worker_t::locate(const boost::property_tree::ptree& request, http_request_info_t& request_info) {
+    worker_t::result_t loki_worker_t::locate(const rapidjson::Document& request, http_request_info_t& request_info) {
       init_locate(request);
       //correlate the various locations to the underlying graph
       auto json = json::array({});
-      auto verbose = request.get<bool>("verbose", false);
+      auto* verbose_ptr = rapidjson::GetValueByPointer(request, "/verbose");
+      auto verbose = verbose_ptr ? verbose_ptr->GetBool() : false;
       const auto projections = loki::Search(locations, reader, edge_filter, node_filter);
 
       for(const auto& location : locations) {
+        auto* id_ptr = rapidjson::Pointer("/id").Get(request);
+        auto id = id_ptr ? boost::optional<std::string>{id_ptr->GetString()} : boost::optional<std::string>{};
         try {
-          json->emplace_back(serialize(request.get_optional<std::string>("id"), projections.at(location), reader, verbose));
+          json->emplace_back(serialize(id, projections.at(location), reader, verbose));
         }
         catch(const std::exception& e) {
-          json->emplace_back(serialize(request.get_optional<std::string>("id"), location.latlng_, "No data found for location", verbose));
+          json->emplace_back(serialize(id, location.latlng_, "No data found for location", verbose));
         }
       }
 
       std::ostringstream stream;
       //jsonp callback if need be
-      auto jsonp = request.get_optional<std::string>("jsonp");
-      if(jsonp)
-        stream << *jsonp << '(';
+      auto* jsonp_ptr = rapidjson::Pointer("/jsonp").Get(request);
+      if(jsonp_ptr)
+        stream << jsonp_ptr->GetString() << '(';
       stream << *json;
-      if(jsonp)
+      if(jsonp_ptr)
         stream << ')';
 
       worker_t::result_t result{false};
-      http_response_t response(200, "OK", stream.str(), headers_t{CORS, jsonp ? JS_MIME : JSON_MIME});
+      http_response_t response(200, "OK", stream.str(), headers_t{CORS, jsonp_ptr ? JS_MIME : JSON_MIME});
       response.from_info(request_info);
       result.messages.emplace_back(response.to_string());
       return result;
