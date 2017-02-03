@@ -5,6 +5,7 @@
 #include <unordered_map>
 
 #include <valhalla/baldr/datetime.h>
+#include <valhalla/baldr/rapidjson_utils.h>
 #include <valhalla/midgard/logging.h>
 #include <rapidjson/pointer.h>
 
@@ -63,9 +64,10 @@ namespace valhalla {
   namespace loki {
 
     void loki_worker_t::init_matrix(ACTION_TYPE action, rapidjson::Document& request) {
-      auto* request_locations = rapidjson::Pointer("/locations").Get(request);
-      auto* request_sources = rapidjson::Pointer("/sources").Get(request);
-      auto* request_targets = rapidjson::Pointer("/targets").Get(request);
+      //auto* request_locations = rapidjson::Pointer("/locations").Get(request);
+      auto request_locations = GetOptionalFromRapidJson<rapidjson::Value::Array>(request, "/locations");
+      auto request_sources = GetOptionalFromRapidJson<rapidjson::Value::Array>(request, "/sources");
+      auto request_targets = GetOptionalFromRapidJson<rapidjson::Value::Array>(request, "/targets");
       auto& allocator = request.GetAllocator();
 
       //we require locations
@@ -78,7 +80,7 @@ namespace valhalla {
       //if MATRIX OR OPTIMIZED and not using sources & targets parameters
       //deprecated way of specifying
       if (!request_sources && !request_targets) {
-        if (request_locations->GetArray().Size() < 2)
+        if (request_locations->Size() < 2)
           throw valhalla_exception_t{400, 120};
 
         //create new sources and targets ptree from locations
@@ -101,18 +103,18 @@ namespace valhalla {
           case MANY_TO_MANY:
           case OPTIMIZED_ROUTE:
             // Copy
-            request.AddMember("targets", rapidjson::Value{*request_locations, allocator}, allocator);
+            request.AddMember("targets", rapidjson::Value{request["locations"], allocator}, allocator);
             // Move
             request.AddMember("sources", *request_locations, allocator);
             break;
         }
         //add these back in the original request (in addition to locations while being deprecated
 
-        request_sources = rapidjson::Pointer("/sources").Get(request);
-        request_targets = rapidjson::Pointer("/targets").Get(request);
+        request_sources = GetOptionalFromRapidJson<rapidjson::Value::Array>(request, "/sources");
+        request_targets = GetOptionalFromRapidJson<rapidjson::Value::Array>(request, "/targets");
       }
-      sources.reserve(request_sources->GetArray().Size());
-      for(const auto& source : request_sources->GetArray()) {
+      sources.reserve(request_sources->Size());
+      for(const auto& source : *request_sources) {
         try{
           sources.push_back(baldr::Location::FromRapidJson(source));
           sources.back().heading_.reset();
@@ -121,8 +123,8 @@ namespace valhalla {
           throw valhalla_exception_t{400, 131};
         }
       }
-      targets.reserve(request_targets->GetArray().Size());
-      for(const auto& target : request_targets->GetArray()) {
+      targets.reserve(request_targets->Size());
+      for(const auto& target : *request_targets) {
         try{
           targets.push_back(baldr::Location::FromRapidJson(target));
           targets.back().heading_.reset();
@@ -133,11 +135,11 @@ namespace valhalla {
       }
       if(sources.size() < 1)
         throw valhalla_exception_t{400, 121};
-      valhalla::midgard::logging::Log("source_count::" + std::to_string(request_sources->GetArray().Size()), " [ANALYTICS] ");
+      valhalla::midgard::logging::Log("source_count::" + std::to_string(request_sources->Size()), " [ANALYTICS] ");
 
       if(targets.size() < 1)
         throw valhalla_exception_t{400, 122};
-      valhalla::midgard::logging::Log("target_count::" + std::to_string(request_targets->GetArray().Size()), " [ANALYTICS] ");
+      valhalla::midgard::logging::Log("target_count::" + std::to_string(request_targets->Size()), " [ANALYTICS] ");
 
       //no locations!
       request.RemoveMember("locations");

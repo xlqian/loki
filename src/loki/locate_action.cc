@@ -3,6 +3,7 @@
 
 #include <valhalla/baldr/json.h>
 #include <valhalla/baldr/pathlocation.h>
+#include <valhalla/baldr/rapidjson_utils.h>
 #include <valhalla/midgard/logging.h>
 #include <rapidjson/pointer.h>
 
@@ -140,13 +141,11 @@ namespace valhalla {
       init_locate(request);
       //correlate the various locations to the underlying graph
       auto json = json::array({});
-      auto* verbose_ptr = rapidjson::GetValueByPointer(request, "/verbose");
-      auto verbose = verbose_ptr ? verbose_ptr->GetBool() : false;
+      auto verbose_optinal = GetOptionalFromRapidJson<bool>(request, "/verbose");
+      auto verbose = verbose_optinal ? *verbose_optinal : false;
       const auto projections = loki::Search(locations, reader, edge_filter, node_filter);
-
+      auto id = GetOptionalFromRapidJson<std::string>(request, "/id");
       for(const auto& location : locations) {
-        auto* id_ptr = rapidjson::Pointer("/id").Get(request);
-        auto id = id_ptr ? boost::optional<std::string>{id_ptr->GetString()} : boost::optional<std::string>{};
         try {
           json->emplace_back(serialize(id, projections.at(location), reader, verbose));
         }
@@ -157,15 +156,15 @@ namespace valhalla {
 
       std::ostringstream stream;
       //jsonp callback if need be
-      auto* jsonp_ptr = rapidjson::Pointer("/jsonp").Get(request);
-      if(jsonp_ptr)
-        stream << jsonp_ptr->GetString() << '(';
+      auto jsonp = GetOptionalFromRapidJson<std::string>(request, "/jsonp");
+      if(jsonp)
+        stream << *jsonp << '(';
       stream << *json;
-      if(jsonp_ptr)
+      if(jsonp)
         stream << ')';
 
       worker_t::result_t result{false};
-      http_response_t response(200, "OK", stream.str(), headers_t{CORS, jsonp_ptr ? JS_MIME : JSON_MIME});
+      http_response_t response(200, "OK", stream.str(), headers_t{CORS, jsonp ? JS_MIME : JSON_MIME});
       response.from_info(request_info);
       result.messages.emplace_back(response.to_string());
       return result;

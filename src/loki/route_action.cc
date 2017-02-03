@@ -4,6 +4,7 @@
 #include <boost/property_tree/info_parser.hpp>
 
 #include <valhalla/baldr/datetime.h>
+#include <valhalla/baldr/rapidjson_utils.h>
 #include <valhalla/midgard/logging.h>
 #include <rapidjson/document.h>
 #include <rapidjson/writer.h>
@@ -51,13 +52,13 @@ namespace valhalla {
 
     worker_t::result_t loki_worker_t::route(rapidjson::Document& request, http_request_info_t& request_info) {
       init_route(request);
-      auto costing = request["costing"].GetString();
-      check_locations(locations.size(), max_locations.find(costing)->second);
-      check_distance(reader, locations, max_distance.find(costing)->second);
+      auto costing = GetOptionalFromRapidJson<std::string>(request, "/costing");
+      check_locations(locations.size(), max_locations.find(*costing)->second);
+      check_distance(reader, locations, max_distance.find(*costing)->second);
       auto& allocator = request.GetAllocator();
 
       // Validate walking distances (make sure they are in the accepted range)
-      if (costing == "multimodal" || costing == "transit") {
+      if (*costing == "multimodal" || *costing == "transit") {
         auto transit_start_end_max_distance = rapidjson::GetValueByPointerWithDefault(request,
             "/costing_options/pedestrian/transit_start_end_max_distance", min_transit_walking_dis).GetUint();
         auto transit_transfer_max_distance =rapidjson::GetValueByPointerWithDefault(request,
@@ -75,36 +76,36 @@ namespace valhalla {
       }
       auto date_type_pointer = rapidjson::Pointer("/date_time/type");
       //default to current date_time for mm or transit.
-      if (! date_type_pointer.Get(request) && (costing == "multimodal" || costing == "transit")) {
+      if (! date_type_pointer.Get(request) && (*costing == "multimodal" || *costing == "transit")) {
         date_type_pointer.Set(request, 0);
       }
-      auto* date_type = date_type_pointer.Get(request);
-
+      auto date_type = GetOptionalFromRapidJson<int>(request, "/date_time/type");
+      auto& locations_array = request["/locations"];
       //check the date stuff
-      auto* date_time_value = rapidjson::Pointer("/date_time/value").Get(request);
+      auto date_time_value = GetOptionalFromRapidJson<std::string>(request, "/date_time/value");
       if (date_type) {
         //not yet on this
-        if(date_type->GetInt() == 2 && (costing == "multimodal" || costing == "transit"))
+        if(*date_type == 2 && (*costing == "multimodal" || *costing == "transit"))
           return jsonify_error({501, 141}, request_info);
 
         //what kind
-        switch(date_type->GetInt()) {
+        switch(*date_type) {
         case 0: //current
-          request["locations"].GetArray().Begin()->AddMember("date_time", "current", allocator);
+          locations_array.Begin()->AddMember("date_time", "current", allocator);
           break;
         case 1: //depart
           if(!date_time_value)
             throw valhalla_exception_t{400, 160};
-          if (!DateTime::is_iso_local(date_time_value->GetString()))
+          if (!DateTime::is_iso_local(*date_time_value))
             throw valhalla_exception_t{400, 162};
-          request["locations"].GetArray().Begin()->AddMember("date_time", rapidjson::Value{*date_time_value, allocator}, allocator);
+          locations_array.Begin()->AddMember("date_time", *date_time_value, allocator);
           break;
         case 2: //arrive
           if(!date_time_value)
             throw valhalla_exception_t{400, 161};
-          if (!DateTime::is_iso_local(date_time_value->GetString()))
+          if (!DateTime::is_iso_local(*date_time_value))
             throw valhalla_exception_t{400, 162};
-          request["locations"].GetArray().End()->AddMember("date_time", rapidjson::Value{*date_time_value, allocator}, allocator);
+          locations_array.End()->AddMember("date_time", *date_time_value, allocator);
           break;
         default:
           throw valhalla_exception_t{400, 163};

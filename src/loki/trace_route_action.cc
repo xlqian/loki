@@ -4,7 +4,7 @@
 #include <valhalla/midgard/pointll.h>
 #include <valhalla/midgard/logging.h>
 #include <valhalla/midgard/encoded.h>
-
+#include <valhalla/baldr/rapidjson_utils.h>
 #include <boost/property_tree/json_parser.hpp>
 #include <math.h>
 #include <rapidjson/pointer.h>
@@ -87,19 +87,20 @@ namespace valhalla {
     void loki_worker_t::parse_trace(rapidjson::Document& request) {
       auto& allocator = request.GetAllocator();
       //we require uncompressed shape or encoded polyline
-      auto* input_shape = rapidjson::Pointer("/shape").Get(request);
-      auto* encoded_polyline = rapidjson::Pointer("/encoded_polyline").Get(request);
+      //auto* input_shape = rapidjson::Pointer("/shape").Get(request);
+      auto input_shape = GetOptionalFromRapidJson<rapidjson::Value::Array>(request, "/shape");
+      auto encoded_polyline = GetOptionalFromRapidJson<std::string>(request, "/encoded_polyline");
       //we require shape or encoded polyline but we dont know which at first
       try {
         //uncompressed shape
         if (input_shape) {
-          for (const auto& latlng : input_shape->GetArray()) {
+          for (const auto& latlng : *input_shape) {
             shape.push_back(Location::FromRapidJson(latlng).latlng_);
           }
         }//compressed shape
         //if we receive as encoded then we need to add as shape to request
         else if (encoded_polyline) {
-          shape = midgard::decode<std::vector<midgard::PointLL> >(encoded_polyline->GetString());
+          shape = midgard::decode<std::vector<midgard::PointLL> >(*encoded_polyline);
           rapidjson::Value shape_array{rapidjson::kArrayType};
           for(const auto& pt : shape) {
             rapidjson::Value point_child{rapidjson::kObjectType};

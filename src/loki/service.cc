@@ -14,6 +14,7 @@
 #include <valhalla/sif/pedestriancost.h>
 #include <valhalla/baldr/json.h>
 #include <valhalla/baldr/errorcode_util.h>
+#include <valhalla/baldr/rapidjson_utils.h>
 #include <rapidjson/document.h>
 #include <rapidjson/writer.h>
 #include <rapidjson/pointer.h>
@@ -138,10 +139,11 @@ namespace valhalla {
 
     void loki_worker_t::parse_locations(const rapidjson::Document& request) {
       //we require locations
-      if (! request.HasMember("locations")){
+      auto locations_array = GetOptionalFromRapidJson<rapidjson::Value::ConstArray>(request, "/locations");
+      if (! locations_array){
         throw valhalla_exception_t{400, 110};
       }
-      for(const auto& location : request["locations"].GetArray()) {
+      for(const auto& location : *locations_array) {
         try{
           locations.push_back(baldr::Location::FromRapidJson(location));
         }
@@ -154,33 +156,32 @@ namespace valhalla {
 
     void loki_worker_t::parse_costing(const rapidjson::Document& request) {
       //using the costing we can determine what type of edge filtering to use
-      auto* consting_ptr = rapidjson::Pointer("/costing").Get(request);
-      if (! consting_ptr) {
+      auto costing = GetOptionalFromRapidJson<std::string>(request, "/costing");
+      if (! costing) {
         throw valhalla_exception_t{400, 124};
       }
-      auto costing = consting_ptr->GetString();
-      valhalla::midgard::logging::Log(std::string("costing_type::")+ costing, " [ANALYTICS] ");
+      valhalla::midgard::logging::Log("costing_type::"+ *costing, " [ANALYTICS] ");
       // TODO - have a way of specifying mode at the location
-      if(costing == "multimodal")
+      if(*costing == "multimodal")
         costing = "pedestrian";
 
       // Get the costing options if in the config or get the empty default.
       // Creates the cost in the cost factory
-      std::string method_options = std::string("/costing_options/") + costing;
+      std::string method_options = "/costing_options/" + *costing;
       auto* method_options_ptr = rapidjson::Pointer(method_options.c_str()).Get(request);
       try{
         cost_ptr_t c;
         if (method_options_ptr){
-          c = factory.Create(costing, *method_options_ptr);
+          c = factory.Create(*costing, *method_options_ptr);
         }else {
-          c = factory.Create(costing, rapidjson::Value{});
+          c = factory.Create(*costing, rapidjson::Value{});
         }
 
         edge_filter = c->GetEdgeFilter();
         node_filter = c->GetNodeFilter();
       }
       catch(const std::runtime_error&) {
-        throw valhalla_exception_t{400, 125, std::string("'") + costing + "'"};
+        throw valhalla_exception_t{400, 125, "'" + *costing + "'"};
       }
     }
 
@@ -257,8 +258,7 @@ namespace valhalla {
         //parse the query's json
         auto request_rj = from_request(action->second, request);
 
-        auto* jsonp_ptr = rapidjson::Pointer("/jsonp").Get(request_rj);
-        jsonp = jsonp_ptr ? boost::optional<std::string>{jsonp_ptr->GetString()} : boost::optional<std::string>{};
+        jsonp = GetOptionalFromRapidJson<std::string>(request_rj, "/jsonp");
         //let further processes more easily know what kind of request it was
         rapidjson::SetValueByPointer(request_rj, "/action", action->second);
         //let further processes know about tracking

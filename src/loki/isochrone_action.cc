@@ -1,11 +1,13 @@
 #include "loki/service.h"
 #include "loki/search.h"
 #include <valhalla/baldr/datetime.h>
+#include <valhalla/baldr/rapidjson_utils.h>
 #include <boost/property_tree/json_parser.hpp>
 #include <rapidjson/pointer.h>
 
 using namespace prime_server;
 using namespace valhalla::baldr;
+
 
 namespace {
 const headers_t::value_type CORS{"Access-Control-Allow-Origin", "*"};
@@ -23,14 +25,14 @@ namespace valhalla {
         l.heading_.reset();
 
       //make sure the isoline definitions are valid
-      auto* contours = rapidjson::Pointer("/contours").Get(request);
-      if(!contours)
+      auto contours = GetOptionalFromRapidJson<rapidjson::Value::ConstArray>(request, "/contours");
+      if(! contours)
         throw valhalla_exception_t{400, 113};
       //check that the number of contours is ok
-      if(contours->GetArray().Size() > max_contours)
+      if(contours->Size() > max_contours)
         throw valhalla_exception_t{400, 152, std::to_string(max_contours)};
       size_t prev = 0;
-      for(const auto& contour : contours->GetArray()) {
+      for(const auto& contour : *contours) {
         auto* time_ptr = rapidjson::Pointer("/time").Get(request);
         size_t c = time_ptr ? time_ptr->GetUint() : -1;
         if(c < prev || c == -1)
@@ -48,33 +50,36 @@ namespace valhalla {
       if (locations.size() > max_locations.find("isochrone")->second)
         throw valhalla_exception_t{400, 150, std::to_string(max_locations.find("isochrone")->second)};
 
-      auto costing = request["costing"].GetString();
-      auto* date_type =  rapidjson::Pointer("/date_time/type").Get(request);
+      auto costing = GetOptionalFromRapidJson<std::string>(request, "/costing");
+      if (! costing)
+        costing = "";
+      auto date_type = GetOptionalFromRapidJson<int>(request, "/date_time/type");
 
       auto& allocator = request.GetAllocator();
       //default to current date_time for mm or transit.
-      if (! date_type && (costing == "multimodal" || costing == "transit")) {
-        date_type->Set(0);
+      if (! date_type && (*costing == "multimodal" || *costing == "transit")) {
+        rapidjson::SetValueByPointer(request, "/date_time/type", 0);
+        date_type = 0;
       }
 
       //check the date stuff
-      auto* date_time_value =rapidjson::Pointer("/date_time/value").Get(request);
+      auto date_time_value = GetOptionalFromRapidJson<std::string>(request, "/date_time/value");
       if (date_type) {
         //not yet on this
-        if(date_type->GetInt() == 2) {
+        if(! date_type || *date_type == 2) {
           jsonify_error({501, 142}, request_info);
         }
         //what kind
-        switch(date_type->GetInt()) {
+        switch(*date_type) {
         case 0: //current
           rapidjson::GetValueByPointer(request, "/locations/0")->AddMember("date_time", "current", allocator);
           break;
         case 1: //depart
-          if(!date_time_value)
+          if(! date_time_value)
             throw valhalla_exception_t{400, 160};
-          if (!DateTime::is_iso_local(date_time_value->GetString()))
+          if (!DateTime::is_iso_local(*date_time_value))
             throw valhalla_exception_t{400, 162};
-          rapidjson::GetValueByPointer(request, "/locations/0")->AddMember("date_time", rapidjson::Value{*date_time_value, allocator}, allocator);
+          rapidjson::GetValueByPointer(request, "/locations/0")->AddMember("date_time", *date_time_value, allocator);
           break;
         default:
           throw valhalla_exception_t{400, 163};
