@@ -33,8 +33,8 @@ namespace valhalla {
         throw valhalla_exception_t{400, 152, std::to_string(max_contours)};
       size_t prev = 0;
       for(const auto& contour : *contours) {
-        auto* time_ptr = rapidjson::Pointer("/time").Get(request);
-        size_t c = time_ptr ? time_ptr->GetUint() : -1;
+        auto time = GetOptionalFromRapidJson<size_t>(request, "/time");
+        size_t c = time ? *time : -1;
         if(c < prev || c == -1)
           throw valhalla_exception_t{400, 111};
         if(c > max_time)
